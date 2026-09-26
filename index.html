@@ -236,15 +236,15 @@
           <input type="number" id="doseIntervalInput" step="1" min="1" max="14" placeholder="1–14">
         </div>
         <div>
-          <label for="typicalDoseInput">Typical dose, mg</label>
-          <input type="number" id="typicalDoseInput" step="any" min="0">
+          <label for="weeklyDoseInput">Weekly dose, mg</label>
+          <input type="number" id="weeklyDoseInput" step="any" min="0">
         </div>
         <div>
           <label for="doseTimeInput">Usual dose time</label>
           <input type="time" id="doseTimeInput">
         </div>
       </div>
-      <div class="note" id="weeklyDoseNote" hidden></div>
+      <div class="note" id="eachDoseNote" hidden></div>
       <!-- What the schedule counts from; an anchor dose is only for starting or restarting doses. -->
       <div class="summary-line anchor-line">
         <span class="muted" id="anchorSummary"></span>
@@ -464,7 +464,7 @@
 </div>
 
 <!-- Asks about a scheduled dose once it's due; nothing is logged until it's confirmed,
-     and then just as scheduled (its day, the typical dose), with nothing to edit. -->
+     and then just as scheduled (its day and amount), with nothing to edit. -->
 <div class="modal-overlay" id="doseOverlay">
   <div class="modal" role="dialog" aria-labelledby="doseModalTitle">
     <h3 id="doseModalTitle">Did you take your dose?</h3>
@@ -569,6 +569,9 @@
   // Newest first; APP_VERSION is the top entry. Version X.YYY, bump one tier per
   // change: +0.001 bug fix, +0.010 tiny tweak, +0.100 small feature, +1 large feature.
   const CHANGELOG = [
+    { version: "5.608", date: "2026-09-26", changes: [
+      "Setup now takes your weekly dose and works out each dose from it and the days between doses, so different dosing schedules compare like for like."
+    ] },
     { version: "5.508", date: "2026-09-26", changes: [
       "Doses are now only logged by confirming them, so Add Entry is just for weigh-ins.",
       "Setup can set an anchor dose to start or restart your schedule from, for when there's no recent dose to count from."
@@ -773,6 +776,9 @@
   const vialFor = med => (profile.vial && profile.vial.medication === med ? profile.vial : null);
   const activeVial = () => vialFor(currentMedication());
   const isDoseInterval = d => Number.isInteger(d) && d >= 1 && d <= MAX_DOSE_INTERVAL_DAYS;
+  // Each dose: a weekly dose spread over the days between doses, to 3 decimal
+  // places (small daily doses need them), so any two plans compare by the week.
+  const eachDoseMg = (weeklyMg, intervalDays) => +(weeklyMg * intervalDays / 7).toFixed(3);
   // Rounded for display, without trailing zeros: 5.8333 -> "5.83", 20.0 -> "20".
   const fmtNum = (v, places) => String(+v.toFixed(places));
   const fmtConc = mgPerMl => `${fmtNum(mgPerMl, 3)} mg/mL`; // as precise as it can be entered
@@ -882,10 +888,12 @@
   function cleanDosePlan(p) {
     if (!p || typeof p !== "object" || !Object.hasOwn(MEDICATIONS, p.medication)) return null;
     const n = p.nextDose || (p.postponed && { after: p.postponed.after, date: p.postponed.to }); // "postponed" { after, to } in 5.397–5.407
+    const intervalDays = isDoseInterval(p.intervalDays) ? p.intervalDays : null;
     return {
       medication: p.medication,
-      intervalDays: isDoseInterval(p.intervalDays) ? p.intervalDays : null,
-      doseMg: isPos(p.doseMg) ? p.doseMg : null,
+      intervalDays,
+      // Before 5.608 a plan held each dose (doseMg) instead of the weekly dose.
+      weeklyMg: isPos(p.weeklyMg) ? p.weeklyMg : isPos(p.doseMg) && intervalDays ? +(p.doseMg * 7 / intervalDays).toFixed(3) : null,
       doseTime: isTime(p.doseTime) ? p.doseTime : null, // a dose is asked about from then on its day
       // The next dose set to a day (by postponing it, or as an anchor dose), until
       // a dose is logged after the last one taken when it was set (after, "" if none).
@@ -1148,7 +1156,7 @@
     const units = mg => (vial ? ` &middot; <span>${fmtUnits(mg, vial.mgPerMl)}</span>` : "");
     // A plan with no dose taken or set has nothing to count from.
     const plan = medicationEnabled() && planFor(currentMedication());
-    const waiting = !!(plan && plan.intervalDays && plan.doseMg) && !schedule.length;
+    const waiting = !!(plan && plan.intervalDays && plan.weeklyMg) && !schedule.length;
     $("upcomingDosesSection").hidden = !schedule.length && !last && !waiting;
     $("upcomingDosesGrid").innerHTML =
       (last ? `<div class="stat"><div class="val">${last.doseMg} mg</div><div class="lbl">Last dose taken${otherMedNote(last)} &middot; <span>${fmtDateBrief(last.date)}</span></div></div>` : "") +
@@ -1292,9 +1300,9 @@
     vialEditing = false;
     if (med === "none") return;
     $("dosingTitle").textContent = `${medLabel(med)} dosing`;
-    $("typicalDoseInput").placeholder = `e.g. ${MEDICATIONS[med].example}`;
+    $("weeklyDoseInput").placeholder = `e.g. ${MEDICATIONS[med].example}`;
     $("doseIntervalInput").value = (plan && plan.intervalDays) || "";
-    $("typicalDoseInput").value = (plan && plan.doseMg) || "";
+    $("weeklyDoseInput").value = (plan && plan.weeklyMg) || "";
     $("doseTimeInput").value = (plan && plan.doseTime) || "";
     anchorEditing = false;
     renderAnchor();
@@ -1352,17 +1360,18 @@
 
   const bacWaterMl = () => Math.round(parseFloat($("bacMlInput").value) * 10) / 10;
 
-  // Live results as the dosing is entered: the plan's weekly equivalent, the
-  // vial's concentration, and the typical dose in syringe units.
+  // Live results as the dosing is entered: each dose from the weekly dose, the
+  // vial's concentration, and each dose in syringe units.
   function updateDosingNotes() {
     const show = (id, html) => { $(id).innerHTML = html; $(id).hidden = !html; };
-    const days = readNumber("doseIntervalInput"), dose = readNumber("typicalDoseInput");
-    show("weeklyDoseNote", isDoseInterval(days) && isPos(dose) ? `Weekly equivalent: <strong>${fmtNum(dose * 7 / days, 2)} mg</strong>` : "");
+    const days = readNumber("doseIntervalInput"), weekly = readNumber("weeklyDoseInput");
+    const dose = isDoseInterval(days) && isPos(weekly) ? eachDoseMg(weekly, days) : null;
+    show("eachDoseNote", dose ? `Each dose: <strong>${dose} mg</strong>` : "");
     $("bacMlValue").textContent = `${bacWaterMl()} mL`;
     const vial = vialEditing ? enteredVial(true) : vialFor(formMedication());
     const notes = [];
     if (vial && vialEditing && vialMode === "mix") notes.push(`Concentration: <strong>${fmtConc(vial.mgPerMl)}</strong>`);
-    if (vial && isPos(dose)) notes.push(`${dose} mg = <strong>${fmtUnits(dose, vial.mgPerMl)}</strong> on a U&#8209;100 syringe`); // "U-100" never splits
+    if (vial && dose) notes.push(`${dose} mg = <strong>${fmtUnits(dose, vial.mgPerMl)}</strong> on a U&#8209;100 syringe`); // "U-100" never splits
     // Under the saved vial, or inside the calculator while it's open.
     show("vialUnitsNote", notes.join(" &middot; "));
     show("vialCalcNote", notes.join(" &middot; "));
@@ -1370,20 +1379,20 @@
 
   // The dosing plan as entered, or false (after saying why) if it isn't valid.
   function enteredPlan() {
-    const intervalDays = readNumber("doseIntervalInput"), doseMg = readNumber("typicalDoseInput");
+    const intervalDays = readNumber("doseIntervalInput"), weeklyMg = readNumber("weeklyDoseInput");
     if (intervalDays !== null && !isDoseInterval(intervalDays)) {
       alert(`Days between doses must be a whole number from 1 to ${MAX_DOSE_INTERVAL_DAYS}.`);
       return false;
     }
-    if (doseMg !== null && !isPos(doseMg)) {
-      alert("Please enter a valid positive typical dose, or leave it blank.");
+    if (weeklyMg !== null && !isPos(weeklyMg)) {
+      alert("Please enter a valid positive weekly dose, or leave it blank.");
       return false;
     }
     if ($("doseTimeInput").validity.badInput) { // only partly filled in
       alert("Please finish entering your usual dose time, or leave it blank.");
       return false;
     }
-    return { intervalDays, doseMg, doseTime: $("doseTimeInput").value || null };
+    return { intervalDays, weeklyMg, doseTime: $("doseTimeInput").value || null };
   }
 
   // The vial in the calculator: null while nothing's entered, false if it isn't
@@ -1429,9 +1438,10 @@
   // medication's dosing plan whenever they're shown, so any change to the plan
   // moves them. One falls every intervalDays after the last dose taken, or from
   // a day the next dose was set to (by postponing it, or as an anchor dose in
-  // setup), each the typical dose. None is logged until it's confirmed in the
-  // pop-up once due, just as scheduled. A due dose waits to be confirmed until
-  // it's three intervals old; after that it counts as missed.
+  // setup), each the weekly dose spread over the days between doses. None is
+  // logged until it's confirmed in the pop-up once due, just as scheduled. A due
+  // dose waits to be confirmed until it's three intervals old; after that it
+  // counts as missed.
 
   // When a dose comes due: its day at the usual dose time (the start of the day
   // without one), on this device's clock.
@@ -1446,11 +1456,11 @@
   const setNextDose = (plan, lastTaken) => (plan && plan.nextDose && lastTaken <= plan.nextDose.after ? plan.nextDose.date : "");
 
   // The next three doses as { date, doseMg, due, after }, `after` being the last
-  // dose taken ("" if none). None without days between doses and a typical dose,
+  // dose taken ("" if none). None without days between doses and a weekly dose,
   // or with nothing to count from: no dose taken or set.
   function doseSchedule() {
     const plan = medicationEnabled() ? planFor(currentMedication()) : null;
-    if (!plan || !plan.intervalDays || !plan.doseMg) return [];
+    if (!plan || !plan.intervalDays || !plan.weeklyMg) return [];
     const today = todayStr(), every = plan.intervalDays, now = Date.now();
     const after = lastDoseDate(), set = setNextDose(plan, after);
     if (!after && !set) return [];
@@ -1458,7 +1468,7 @@
     const missed = Math.max(0, Math.floor(daysBetween(next, today) / every) - MAX_UPCOMING_DOSES + 1);
     return Array.from({ length: MAX_UPCOMING_DOSES }, (_, i) => {
       const date = addDays(next, (missed + i) * every);
-      return { date, doseMg: plan.doseMg, due: now >= dueAt(date, plan.doseTime), after };
+      return { date, doseMg: eachDoseMg(plan.weeklyMg, every), due: now >= dueAt(date, plan.doseTime), after };
     });
   }
 
