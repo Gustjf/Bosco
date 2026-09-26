@@ -36,7 +36,6 @@
   .row > div { flex: 1; min-width: 100px; }
   .row > .btn-cell { flex: 0 0 auto; align-self: flex-end; }
   .row > .date-cell { min-width: 140px; } /* room for the whole date beside its calendar icon */
-  @media (max-width: 600px) { #entryRow > div:not(.btn-cell) { flex-basis: 40%; } } /* phones: two fields per row, so none gets squeezed */
   .actions { margin-top: 10px; }
   .toolbar { display: flex; align-items: center; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
   .empty-msg { color: var(--muted); font-size: .9em; padding: 8px 0; }
@@ -159,8 +158,9 @@
   .dose-fields { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; align-items: end; }
   @media (max-width: 600px) { .dose-fields { grid-template-columns: 1fr 1fr; } }
   .vial-head { margin-top: 14px; }
-  .vial-line { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px 12px; font-size: .9em; }
-  .vial-line .muted { color: var(--muted); }
+  .summary-line { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px 12px; font-size: .9em; }
+  .summary-line .muted { color: var(--muted); }
+  .anchor-line, #anchorEditor { margin-top: 10px; }
   .vial-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; }
   .bac-head { margin-top: 12px; }
 
@@ -245,9 +245,23 @@
         </div>
       </div>
       <div class="note" id="weeklyDoseNote" hidden></div>
+      <!-- What the schedule counts from; an anchor dose is only for starting or restarting doses. -->
+      <div class="summary-line anchor-line">
+        <span class="muted" id="anchorSummary"></span>
+        <button type="button" class="secondary small" id="setAnchorBtn">Set anchor dose</button>
+      </div>
+      <div id="anchorEditor" hidden>
+        <div class="dose-fields">
+          <div>
+            <label for="anchorDateInput">Anchor dose date</label>
+            <input type="date" id="anchorDateInput">
+          </div>
+        </div>
+        <div class="note">Only for starting or restarting doses: your schedule starts over with a dose on this day.</div>
+      </div>
       <div class="subhead vial-head">Active vial</div>
       <div id="vialSummary">
-        <div class="vial-line">
+        <div class="summary-line">
           <span id="vialSummaryText"></span>
           <button type="button" class="secondary small" id="changeVialBtn">Add vial</button>
         </div>
@@ -302,10 +316,6 @@
       <div>
         <label for="weightInput" id="weightInputLabel">Weight, lb</label>
         <input type="number" id="weightInput" step="0.1" min="0" placeholder="e.g. 185.4">
-      </div>
-      <div class="med">
-        <label for="doseInput" id="doseInputLabel">Tirzepatide, mg</label>
-        <input type="number" id="doseInput" step="any" min="0" placeholder="e.g. 5">
       </div>
       <div class="btn-cell"><button id="addBtn">Add Entry</button></div>
     </div>
@@ -540,6 +550,7 @@
   let entryDateDefault = ""; // the "today" the Date field was last set to
   let dosingAsking = false;  // start-up info is showing the dosing plan & vial
   let vialEditing = false;   // the vial calculator is open
+  let anchorEditing = false; // the anchor dose date is showing in start-up info
   let vialMode = "mix";      // "mix" (vial mg + BAC water) | "known" (mg/mL)
   let doseAsking = null;     // the scheduled dose the confirmation pop-up is open for
 
@@ -558,6 +569,10 @@
   // Newest first; APP_VERSION is the top entry. Version X.YYY, bump one tier per
   // change: +0.001 bug fix, +0.010 tiny tweak, +0.100 small feature, +1 large feature.
   const CHANGELOG = [
+    { version: "5.508", date: "2026-09-26", changes: [
+      "Doses are now only logged by confirming them, so Add Entry is just for weigh-ins.",
+      "Setup can set an anchor dose to start or restart your schedule from, for when there's no recent dose to count from."
+    ] },
     { version: "5.408", date: "2026-09-26", changes: [
       "Fixed the dosing fields not lining up on phones: they now sit two per row there, and date and time boxes use the same font and height as the rest."
     ] },
@@ -866,14 +881,15 @@
   // Each keeps when it was saved: where two meet, the more recent one wins.
   function cleanDosePlan(p) {
     if (!p || typeof p !== "object" || !Object.hasOwn(MEDICATIONS, p.medication)) return null;
+    const n = p.nextDose || (p.postponed && { after: p.postponed.after, date: p.postponed.to }); // "postponed" { after, to } in 5.397–5.407
     return {
       medication: p.medication,
       intervalDays: isDoseInterval(p.intervalDays) ? p.intervalDays : null,
       doseMg: isPos(p.doseMg) ? p.doseMg : null,
       doseTime: isTime(p.doseTime) ? p.doseTime : null, // a dose is asked about from then on its day
-      // The next dose moved to another day (to), until a dose is logged after
-      // the last one taken when it was moved (after).
-      postponed: p.postponed && isDate(p.postponed.after) && isDate(p.postponed.to) ? { after: p.postponed.after, to: p.postponed.to } : null,
+      // The next dose set to a day (by postponing it, or as an anchor dose), until
+      // a dose is logged after the last one taken when it was set (after, "" if none).
+      nextDose: n && (n.after === "" || isDate(n.after)) && isDate(n.date) ? { after: n.after, date: n.date } : null,
       savedAt: String(p.savedAt || "")
     };
   }
@@ -1074,8 +1090,6 @@
     document.body.classList.toggle("no-med", !medicationEnabled());
     if (medicationEnabled()) {
       const med = MEDICATIONS[currentMedication()];
-      $("doseInputLabel").textContent = `${med.label}, mg`;
-      $("doseInput").placeholder = `e.g. ${med.example}`;
       $("upcomingDosesTitle").textContent = `Upcoming ${med.label} Doses`;
       $("doseColumnHead").textContent = `${med.label} Dose`;
     }
@@ -1132,7 +1146,7 @@
     // Scheduled doses are all of the current medication, so drawn from its active vial.
     const vial = activeVial();
     const units = mg => (vial ? ` &middot; <span>${fmtUnits(mg, vial.mgPerMl)}</span>` : "");
-    // A plan with no dose logged yet has nothing to count from.
+    // A plan with no dose taken or set has nothing to count from.
     const plan = medicationEnabled() && planFor(currentMedication());
     const waiting = !!(plan && plan.intervalDays && plan.doseMg) && !schedule.length;
     $("upcomingDosesSection").hidden = !schedule.length && !last && !waiting;
@@ -1143,7 +1157,7 @@
         <div class="val">${fmtWeekday(d.date)}</div><div class="lbl"><span>${fmtDateBrief(d.date)}</span> &middot; <span>${d.doseMg} mg</span>${units(d.doseMg)}</div>
         ${d.due ? `<button class="small" data-confirm-dose="${d.date}">Confirm dose</button>` : ""}
       </div>`).join("") +
-      (waiting ? `<div class="empty-msg">Log a dose above, and your next three will be scheduled from it.</div>` : "");
+      (waiting ? `<div class="empty-msg">No dose to count from yet. <button class="secondary small" data-set-anchor>Set anchor dose</button></div>` : "");
     promptDueDose(schedule.find(d => d.due));
   }
 
@@ -1282,7 +1296,37 @@
     $("doseIntervalInput").value = (plan && plan.intervalDays) || "";
     $("typicalDoseInput").value = (plan && plan.doseMg) || "";
     $("doseTimeInput").value = (plan && plan.doseTime) || "";
+    anchorEditing = false;
+    renderAnchor();
     renderVial();
+  }
+
+  // What the schedule counts from, with a button that shows the anchor dose date
+  // (for starting or restarting doses; left blank, it changes nothing).
+  function renderAnchor() {
+    const last = lastDoseDate(), set = setNextDose(planFor(formMedication()), last);
+    const day = d => `${fmtWeekday(d)}, ${fmtDateBrief(d)}`;
+    $("anchorSummary").textContent = set ? `Next dose set for ${day(set)}.` : last ? `Counting from your last dose, ${day(last)}.` : "No dose to count from yet.";
+    $("setAnchorBtn").hidden = anchorEditing;
+    $("anchorEditor").hidden = !anchorEditing;
+  }
+
+  function openAnchorEditor() {
+    anchorEditing = true;
+    $("anchorDateInput").value = "";
+    renderAnchor();
+  }
+
+  // The anchor dose as entered, as the plan's next dose: null if none, false
+  // (after saying why) unless it comes after the last dose taken.
+  function enteredAnchor() {
+    const date = anchorEditing ? $("anchorDateInput").value : "", last = lastDoseDate();
+    if (!date) return null;
+    if (date <= last) {
+      alert(`An anchor dose has to come after your last dose (${fmtDate(last)}).`);
+      return false;
+    }
+    return { after: last, date };
   }
 
   // The active vial (or none) with a button to change it, or the calculator for a new one.
@@ -1384,10 +1428,10 @@
   // Upcoming doses aren't stored: they're worked out from the current
   // medication's dosing plan whenever they're shown, so any change to the plan
   // moves them. One falls every intervalDays after the last dose taken, or from
-  // the day a dose was postponed to, each the typical dose. None is logged until
-  // confirmed: from the pop-up once it's due (just as scheduled), or by adding it
-  // in Add Entry. A due dose waits to be confirmed until it's three intervals
-  // old; after that it counts as missed.
+  // a day the next dose was set to (by postponing it, or as an anchor dose in
+  // setup), each the typical dose. None is logged until it's confirmed in the
+  // pop-up once due, just as scheduled. A due dose waits to be confirmed until
+  // it's three intervals old; after that it counts as missed.
 
   // When a dose comes due: its day at the usual dose time (the start of the day
   // without one), on this device's clock.
@@ -1396,17 +1440,21 @@
     return new Date(+date.slice(0, 4), +date.slice(5, 7) - 1, +date.slice(8, 10), +h, +m).getTime();
   }
 
+  // The day of the last dose taken, "" if none.
+  const lastDoseDate = () => entries.filter(e => hasDose(e) && e.date <= todayStr()).map(e => e.date).pop() || "";
+  // The day a plan's next dose was set to, "" once a dose has been logged since.
+  const setNextDose = (plan, lastTaken) => (plan && plan.nextDose && lastTaken <= plan.nextDose.after ? plan.nextDose.date : "");
+
   // The next three doses as { date, doseMg, due, after }, `after` being the last
-  // dose taken. None without days between doses and a typical dose, or until a
-  // dose is logged.
+  // dose taken ("" if none). None without days between doses and a typical dose,
+  // or with nothing to count from: no dose taken or set.
   function doseSchedule() {
     const plan = medicationEnabled() ? planFor(currentMedication()) : null;
     if (!plan || !plan.intervalDays || !plan.doseMg) return [];
     const today = todayStr(), every = plan.intervalDays, now = Date.now();
-    const after = entries.filter(e => hasDose(e) && e.date <= today).map(e => e.date).pop();
-    if (!after) return [];
-    // A postponed dose keeps its new day until a dose is logged after `after`.
-    const next = plan.postponed && after <= plan.postponed.after ? plan.postponed.to : addDays(after, every);
+    const after = lastDoseDate(), set = setNextDose(plan, after);
+    if (!after && !set) return [];
+    const next = set || addDays(after, every);
     const missed = Math.max(0, Math.floor(daysBetween(next, today) / every) - MAX_UPCOMING_DOSES + 1);
     return Array.from({ length: MAX_UPCOMING_DOSES }, (_, i) => {
       const date = addDays(next, (missed + i) * every);
@@ -1458,8 +1506,8 @@
   // Moves the dose to tomorrow, and the doses after it along with it; nothing is logged.
   function postponeDose() {
     if (!doseAsking) return;
-    const postponed = { after: doseAsking.after, to: addDays(todayStr(), 1) };
-    profile.dosePlan = { ...planFor(currentMedication()), postponed, savedAt: new Date().toISOString() };
+    const nextDose = { after: doseAsking.after, date: addDays(todayStr(), 1) };
+    profile.dosePlan = { ...planFor(currentMedication()), nextDose, savedAt: new Date().toISOString() };
     closeDoseModal();
     save();
     renderAll();
@@ -2121,33 +2169,26 @@
     return el.value === "" ? null : parseFloat(el.value);
   }
 
+  // Adds a weigh-in. Doses aren't added here: they're logged by confirming them.
   function addEntry() {
     const date = $("dateInput").value;
     const weight = readNumber("weightInput");
-    const dose = medicationEnabled() ? readNumber("doseInput") : null;
-    const today = todayStr();
     if (!isDate(date)) return alert("Please enter a date.");
-    if (weight !== null && !isPos(weight)) return alert("Please enter a valid positive weight, or leave it blank.");
-    if (dose !== null && !isPos(dose)) return alert("Please enter a valid positive dose, or leave it blank.");
-    if (weight === null && dose === null) return alert(medicationEnabled() ? "Enter a weight or dose." : "Enter a weight.");
-    if (weight !== null && date > today) return alert("Weigh-ins can't be dated in the future.");
-    // A dose is logged once taken (confirming it); upcoming ones come from the dosing plan.
-    if (dose !== null && date > today) return alert("Doses can't be dated in the future. Log a dose once you've taken it; upcoming doses are scheduled for you from your dosing plan.");
+    if (weight === null) return alert("Enter a weight.");
+    if (!isPos(weight)) return alert("Please enter a valid positive weight.");
+    if (date > todayStr()) return alert("Weigh-ins can't be dated in the future.");
     const existing = entries.find(e => e.date === date);
     // Re-adding a date is how a weigh-in gets corrected, but never silently.
-    if (weight !== null && existing && hasWeight(existing) && existing.weight !== weight &&
+    if (existing && hasWeight(existing) && existing.weight !== weight &&
         !confirm(`${fmtDate(date)} already has a weigh-in of ${existing.weight.toFixed(1)} ${unit}. Replace it with ${weight.toFixed(1)} ${unit}?`)) return;
     if (existing) {
-      // Only overwrite what was entered, so a later dose keeps that day's weigh-in.
-      if (weight !== null) existing.weight = weight;
-      if (dose !== null) Object.assign(existing, { doseMg: dose, medication: currentMedication() });
+      existing.weight = weight; // a dose logged that day stays
     } else {
-      entries.push({ date, weight, doseMg: dose, medication: dose === null ? null : currentMedication() });
+      entries.push({ date, weight, doseMg: null, medication: null });
       entries.sort(byDate);
     }
     save();
     $("weightInput").value = "";
-    $("doseInput").value = "";
     currentPage = 1;
     renderAll();
   }
@@ -2222,6 +2263,7 @@
   $("dosingBox").addEventListener("input", updateDosingNotes);
   onButton($("vialModeToggle"), "button[data-vial-mode]", btn => setVialMode(btn.dataset.vialMode));
   $("changeVialBtn").addEventListener("click", openVialEditor);
+  $("setAnchorBtn").addEventListener("click", openAnchorEditor);
   $("cancelVialBtn").addEventListener("click", () => { vialEditing = false; renderVial(); });
   $("saveVialBtn").addEventListener("click", () => {
     const vial = enteredVial();
@@ -2237,6 +2279,11 @@
     entries = entries.filter(e => e.date !== btn.dataset.date);
     save();
     renderAll();
+  });
+  onButton($("upcomingDosesGrid"), "button[data-set-anchor]", () => {
+    renderOneTimeInfo(true);
+    openAnchorEditor();
+    $("dosingBox").scrollIntoView({ behavior: "smooth", block: "center" });
   });
   onButton($("upcomingDosesGrid"), "button[data-confirm-dose]", btn => {
     const dose = doseSchedule().find(d => d.date === btn.dataset.confirmDose);
@@ -2260,6 +2307,8 @@
     if (plan === false) return;
     const vial = dosing && vialEditing ? enteredVial() : null;
     if (vial === false) return;
+    const anchor = dosing ? enteredAnchor() : null;
+    if (anchor === false) return;
     const prevUnit = unit;
     ONE_TIME_FIELDS.forEach(f => {
       const el = $("oneTimeInput_" + f.key);
@@ -2269,8 +2318,8 @@
     });
     if (dosingAsking) profile.dosingAsked = DOSING_QUESTIONS_VERSION;
     const oldPlan = planFor(med) || {};
-    if (plan && Object.keys(plan).some(k => plan[k] !== (oldPlan[k] ?? null))) {
-      profile.dosePlan = { medication: med, ...plan, postponed: oldPlan.postponed || null, savedAt: new Date().toISOString() };
+    if (plan && (anchor || Object.keys(plan).some(k => plan[k] !== (oldPlan[k] ?? null)))) {
+      profile.dosePlan = { medication: med, ...plan, nextDose: anchor || oldPlan.nextDose || null, savedAt: new Date().toISOString() };
     }
     if (vial) storeVial(vial, med); // its warning came when the calculator was opened
     unit = profile.unit || "lb";
@@ -2314,7 +2363,7 @@
   });
 
   // Enter in an input submits its form row; Ctrl+9 toggles developer mode.
-  const ENTER_SUBMITS = { dateInput: addEntry, weightInput: addEntry, doseInput: addEntry, goalInput: addGoal };
+  const ENTER_SUBMITS = { dateInput: addEntry, weightInput: addEntry, goalInput: addGoal };
   document.addEventListener("keydown", e => {
     if (e.ctrlKey && (e.key === "9" || e.code === "Digit9")) {
       e.preventDefault();
