@@ -104,10 +104,12 @@
   .stat .val { font-size: 1.15em; font-weight: 700; }
   .stat .lbl { font-size: .75em; color: var(--muted); margin-top: 2px; }
   #statsSection .stat { min-width: 230px; } /* room for a full row of window pills */
-  #upcomingDosesGrid .stat { min-width: 140px; } /* room for "Wednesday" */
-  #upcomingDosesGrid .lbl span { white-space: nowrap; } /* a date or amount never splits across lines */
+  /* Room for "Wednesday", or wider when that's what keeps a dose on one line (fewer to a row). */
+  #upcomingDosesGrid .stat { flex: 1 0 140px; min-width: auto; }
+  #upcomingDosesGrid .lbl span, #upcomingDosesGrid .dose { white-space: nowrap; } /* a date or dose never splits across lines */
   #upcomingDosesGrid .stat.due { background: var(--unsaved-bg); border-color: var(--unsaved-border); } /* waiting to be confirmed */
   #upcomingDosesGrid .stat.due button { margin-top: 8px; }
+  .stat .dose { margin-top: 4px; font-size: .9em; } /* a dose's mg and syringe units, easy to read */
   .window-pills { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
   .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: .78em; font-weight: 600; }
   /* Pills on a fixed light background keep their dark text in both themes (as in the exported image). */
@@ -115,6 +117,11 @@
   .badge.projected { background: #fef3c7; color: #92400e; }
   .badge.flat { background: var(--border); color: var(--muted); }
   .badge.unreachable { background: #fee2e2; color: #dc2626; }
+  /* The saved vial's concentration beside doses, to check against the vial in hand
+     (after the heading or amount, or under it when there's no room). */
+  .vial-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px 12px; }
+  .badge.vial { border: 1px solid var(--border); background: var(--card-bg); color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .badge.vial span { color: var(--muted); font-weight: 400; }
 
   /* --- Goals & projection settings --- */
   .proj-box { border-top: 1px dashed var(--border); margin-top: 12px; padding-top: 10px; }
@@ -322,7 +329,10 @@
   </section>
 
   <section id="upcomingDosesSection" class="med" hidden>
-    <h2 id="upcomingDosesTitle">Upcoming Tirzepatide Doses</h2>
+    <div class="vial-row">
+      <h2 id="upcomingDosesTitle">Upcoming Tirzepatide Doses</h2>
+      <span class="badge vial" id="upcomingVialBadge" hidden></span>
+    </div>
     <div class="stat-grid" id="upcomingDosesGrid"></div>
   </section>
 
@@ -471,8 +481,11 @@
     <h3 id="doseModalTitle">Did you take your dose?</h3>
     <p class="modal-hint" id="doseModalText"></p>
     <div class="stat">
-      <div class="val" id="doseModalMg"></div>
-      <div class="lbl" id="doseModalUnits" hidden></div>
+      <div class="vial-row">
+        <div class="val" id="doseModalMg"></div>
+        <span class="badge vial" id="doseModalVial" hidden></span>
+      </div>
+      <div class="dose" id="doseModalUnits" hidden></div>
     </div>
     <div class="actions">
       <button id="doseLogBtn">Log dose</button>
@@ -571,6 +584,10 @@
   // Newest first; APP_VERSION is the top entry. Version X.YYY, bump one tier per
   // change: +0.001 bug fix, +0.010 tiny tweak, +0.100 small feature, +1 large feature.
   const CHANGELOG = [
+    { version: "5.809", date: "2026-09-26", changes: [
+      "Upcoming doses and the dose pop-up now show your saved vial's concentration, to check against the vial in hand before drawing a dose.",
+      "Each upcoming dose's mg and syringe units now sit on a larger line of their own that never splits, so they're easy to read on phones."
+    ] },
     { version: "5.709", date: "2026-09-26", changes: [
       "A late dose's pop-up now has Took it today (beside Took it on the day it was due), which logs it today and counts your next dose from there."
     ] },
@@ -1166,6 +1183,13 @@
     $("nextPageBtn").disabled = currentPage === pages;
   }
 
+  // The saved vial's concentration (or nothing without one), shown beside the
+  // doses whose syringe units come from it, to check against the vial in hand.
+  function showVialBadge(id, vial) {
+    $(id).innerHTML = vial ? `<span>Vial</span> ${fmtConc(vial.mgPerMl)}` : "";
+    $(id).hidden = !vial;
+  }
+
   function renderUpcomingDoses() {
     const today = todayStr(), schedule = doseSchedule();
     const past = entries.filter(e => e.date <= today);
@@ -1174,16 +1198,19 @@
     const last = past.slice(-PAGE_SIZE).some(hasDose) ? null : past.filter(hasDose).pop();
     // Scheduled doses are all of the current medication, so drawn from its active vial.
     const vial = activeVial();
-    const units = mg => (vial ? ` &middot; <span>${fmtUnits(mg, vial.mgPerMl)}</span>` : "");
+    const units = mg => (vial ? ` &middot; <strong>${fmtUnits(mg, vial.mgPerMl)}</strong>` : "");
+    showVialBadge("upcomingVialBadge", schedule.length ? vial : null);
     // A plan with no dose taken or set has nothing to count from.
     const plan = medicationEnabled() && planFor(currentMedication());
     const waiting = !!(plan && plan.intervalDays && plan.weeklyMg) && !schedule.length;
     $("upcomingDosesSection").hidden = !schedule.length && !last && !waiting;
     $("upcomingDosesGrid").innerHTML =
       (last ? `<div class="stat"><div class="val">${last.doseMg} mg</div><div class="lbl">Last dose taken${otherMedNote(last)} &middot; <span>${fmtDateBrief(last.date)}</span></div></div>` : "") +
-      // Upcoming doses lead with the weekday, the day you dose on. Due ones wait to be confirmed.
+      // Upcoming doses lead with the weekday, the day you dose on, then the date
+      // and the dose itself. Due ones wait to be confirmed.
       schedule.map(d => `<div class="stat${d.due ? " due" : ""}">
-        <div class="val">${fmtWeekday(d.date)}</div><div class="lbl"><span>${fmtDateBrief(d.date)}</span> &middot; <span>${d.doseMg} mg</span>${units(d.doseMg)}</div>
+        <div class="val">${fmtWeekday(d.date)}</div><div class="lbl"><span>${fmtDateBrief(d.date)}</span></div>
+        <div class="dose">${d.doseMg} mg${units(d.doseMg)}</div>
         ${d.due ? `<button class="small" data-confirm-dose="${d.date}">Confirm dose</button>` : ""}
       </div>`).join("") +
       (waiting ? `<div class="empty-msg">No dose to count from yet. <button class="secondary small" data-set-anchor>Set anchor dose</button></div>` : "");
@@ -1527,8 +1554,9 @@
     doseAsking = dose;
     $("doseModalText").textContent = `Your ${medLabel(med)} dose was due ${fmtWeekday(dose.date)}, ${fmtDateBrief(dose.date)}${time ? ` at ${fmtTime(time)}` : ""}. It goes in your log once you confirm it.`;
     $("doseModalMg").textContent = `${dose.doseMg} mg`;
-    $("doseModalUnits").innerHTML = vial ? `${fmtUnits(dose.doseMg, vial.mgPerMl)} on a U&#8209;100 syringe` : "";
+    $("doseModalUnits").innerHTML = vial ? `<strong>${fmtUnits(dose.doseMg, vial.mgPerMl)}</strong> on a U&#8209;100 syringe` : "";
     $("doseModalUnits").hidden = !vial;
+    showVialBadge("doseModalVial", vial);
     // A late dose (due before today) is logged on the day it was taken: its own
     // day, named (by weekday within the week), or today.
     const daysLate = daysBetween(dose.date, todayStr());
