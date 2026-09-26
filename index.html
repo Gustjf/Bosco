@@ -464,7 +464,8 @@
 </div>
 
 <!-- Asks about a scheduled dose once it's due; nothing is logged until it's confirmed,
-     and then just as scheduled (its day and amount), with nothing to edit. -->
+     and then as scheduled (its amount, on its day or, for a late one taken late, today),
+     with nothing to edit. -->
 <div class="modal-overlay" id="doseOverlay">
   <div class="modal" role="dialog" aria-labelledby="doseModalTitle">
     <h3 id="doseModalTitle">Did you take your dose?</h3>
@@ -475,6 +476,7 @@
     </div>
     <div class="actions">
       <button id="doseLogBtn">Log dose</button>
+      <button id="doseTodayBtn" hidden>Took it today</button>
       <button class="secondary" id="doseSnoozeBtn">Not yet</button>
       <button class="secondary" id="dosePostponeBtn">Postpone to tomorrow</button>
     </div>
@@ -569,6 +571,9 @@
   // Newest first; APP_VERSION is the top entry. Version X.YYY, bump one tier per
   // change: +0.001 bug fix, +0.010 tiny tweak, +0.100 small feature, +1 large feature.
   const CHANGELOG = [
+    { version: "5.709", date: "2026-09-26", changes: [
+      "A late dose's pop-up now has Took it today (beside Took it on the day it was due), which logs it today and counts your next dose from there."
+    ] },
     { version: "5.609", date: "2026-09-26", changes: [
       "The dose pop-up no longer closes by itself when opened from a later dose's card, and never logs an amount your plan has since changed.",
       "A dose logged with Bosco open in two tabs is no longer lost when the other tab saves; each tab now picks up the other's changes.",
@@ -1464,7 +1469,8 @@
   // moves them. One falls every intervalDays after the last dose taken, or from
   // a day the next dose was set to (by postponing it, or as an anchor dose in
   // setup), each the weekly dose spread over the days between doses. None is
-  // logged until it's confirmed in the pop-up once due, just as scheduled. A due
+  // logged until it's confirmed in the pop-up once due: on its day, or today for
+  // a late one taken late (the schedule then counts on from today). A due
   // dose waits to be confirmed until it's three intervals old; after that it
   // counts as missed.
 
@@ -1501,13 +1507,16 @@
   const sameDose = (a, b) => a.date === b.date && a.doseMg === b.doseMg && a.after === b.after;
 
   // Pops up for the first due dose, unless "Not yet" put it off. An open pop-up
-  // stays while its dose is still due as shown (it may be a later one, opened
-  // from its card), and closes if the schedule moves on meanwhile (say the dose
-  // was logged on another device, or the plan changed its amount).
+  // stays, kept up to date (a dose due last night is late after midnight), while
+  // its dose is still due as shown (it may be a later one, opened from its card),
+  // and closes if the schedule moves on meanwhile (say the dose was logged on
+  // another device, or the plan changed its amount).
   function promptDueDose(due) {
-    if (doseAsking && !due.some(d => sameDose(d, doseAsking))) closeDoseModal();
+    const asked = doseAsking && due.find(d => sameDose(d, doseAsking));
+    if (asked) return openDoseModal(asked);
+    if (doseAsking) closeDoseModal();
     const dose = due[0];
-    if (!dose || doseAsking || $("bugReportOverlay").classList.contains("open")) return;
+    if (!dose || $("bugReportOverlay").classList.contains("open")) return;
     const snooze = readJSON(KEYS.doseSnooze);
     if (snooze && snooze.date === dose.date && Date.now() < snooze.until) return;
     openDoseModal(dose);
@@ -1520,6 +1529,11 @@
     $("doseModalMg").textContent = `${dose.doseMg} mg`;
     $("doseModalUnits").innerHTML = vial ? `${fmtUnits(dose.doseMg, vial.mgPerMl)} on a U&#8209;100 syringe` : "";
     $("doseModalUnits").hidden = !vial;
+    // A late dose (due before today) is logged on the day it was taken: its own
+    // day, named (by weekday within the week), or today.
+    const daysLate = daysBetween(dose.date, todayStr());
+    $("doseLogBtn").textContent = daysLate > 0 ? `Took it ${daysLate < 7 ? fmtWeekday(dose.date) : fmtDateBrief(dose.date)}` : "Log dose";
+    $("doseTodayBtn").hidden = !(daysLate > 0);
     $("doseOverlay").classList.add("open");
   }
 
@@ -1537,10 +1551,11 @@
     return false;
   }
 
-  // Logs the dose just as scheduled, which moves the schedule on from its day.
-  function confirmDose() {
+  // Logs the dose as scheduled, on its day or (a late one taken late) today,
+  // which moves the schedule on from the day it's logged.
+  function confirmDose(takenToday) {
     if (!doseAsking || !stillAsked()) return;
-    const { date, doseMg } = doseAsking, existing = entries.find(e => e.date === date);
+    const date = takenToday ? todayStr() : doseAsking.date, doseMg = doseAsking.doseMg, existing = entries.find(e => e.date === date);
     if (existing) {
       Object.assign(existing, { doseMg, medication: currentMedication() });
     } else {
@@ -2342,7 +2357,8 @@
     const dose = doseSchedule().find(d => d.date === btn.dataset.confirmDose);
     if (dose) openDoseModal(dose);
   });
-  $("doseLogBtn").addEventListener("click", confirmDose);
+  $("doseLogBtn").addEventListener("click", () => confirmDose(false));
+  $("doseTodayBtn").addEventListener("click", () => confirmDose(true));
   $("doseSnoozeBtn").addEventListener("click", snoozeDose);
   $("dosePostponeBtn").addEventListener("click", postponeDose);
   $("doseOverlay").addEventListener("click", e => { if (e.target.id === "doseOverlay") snoozeDose(); });
