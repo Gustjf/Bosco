@@ -54,6 +54,10 @@
   input[type=date], input[type=time], input[type=number], input[type=text], textarea { width: 100%; padding: 7px 8px; border: 1px solid var(--border); border-radius: 5px; font-size: .95em; background: var(--panel); color: var(--text); transition: border-color .2s, box-shadow .2s; }
   input[type=date]:focus, input[type=time]:focus, input[type=number]:focus, input[type=text]:focus, textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring); }
   [data-theme="dark"] input[type=date], [data-theme="dark"] input[type=time] { color-scheme: dark; } /* light calendar/clock icon and picker */
+  /* Every single-line box the same height, whatever the browser draws inside date and time ones
+     (and in the page's font, not their default monospace). */
+  input[type=date], input[type=time], input[type=number], input[type=text] { height: 2.25em; padding-top: 0; padding-bottom: 0; }
+  input[type=date], input[type=time] { font-family: inherit; }
   input[type=number] { -moz-appearance: textfield; appearance: textfield; }
   input[type=number]::-webkit-outer-spin-button, input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
   textarea { padding: 8px; font-family: inherit; font-size: .9em; resize: vertical; min-height: 90px; }
@@ -149,7 +153,11 @@
   .dosing { margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--border); }
   #oneTimeInfoFields:empty { display: none; }
   #oneTimeInfoFields:empty + .dosing { margin-top: 8px; padding-top: 0; border-top: none; } /* only the dosing is being asked */
-  .dosing > .row, .dosing .window-pills { margin-top: 0; }
+  .dosing .window-pills { margin-top: 0; }
+  /* The plan's fields: three across, or two per row on phones (the dose time on
+     a row of its own), boxes lined up even when a label wraps. */
+  .dose-fields { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; align-items: end; }
+  @media (max-width: 600px) { .dose-fields { grid-template-columns: 1fr 1fr; } }
   .vial-head { margin-top: 14px; }
   .vial-line { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px 12px; font-size: .9em; }
   .vial-line .muted { color: var(--muted); }
@@ -222,7 +230,7 @@
     <!-- Dosing plan and the one active vial, for the medication picked above (or already chosen). -->
     <div class="dosing" id="dosingBox" hidden>
       <div class="subhead" id="dosingTitle">Dosing</div>
-      <div class="row">
+      <div class="dose-fields">
         <div>
           <label for="doseIntervalInput">Days between doses</label>
           <input type="number" id="doseIntervalInput" step="1" min="1" max="14" placeholder="1–14">
@@ -550,6 +558,9 @@
   // Newest first; APP_VERSION is the top entry. Version X.YYY, bump one tier per
   // change: +0.001 bug fix, +0.010 tiny tweak, +0.100 small feature, +1 large feature.
   const CHANGELOG = [
+    { version: "5.408", date: "2026-09-26", changes: [
+      "Fixed the dosing fields not lining up on phones: they now sit two per row there, and date and time boxes use the same font and height as the rest."
+    ] },
     { version: "5.407", date: "2026-09-26", changes: [
       "The dose pop-up is now a simple confirmation with nothing to edit: it logs the scheduled day and your typical dose from setup, which scheduling now needs."
     ] },
