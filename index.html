@@ -486,6 +486,7 @@
         <span class="badge vial" id="doseModalVial" hidden></span>
       </div>
       <div class="dose" id="doseModalUnits" hidden></div>
+      <div class="lbl" id="doseModalWeekly"></div>
     </div>
     <div class="actions">
       <button id="doseLogBtn">Log dose</button>
@@ -584,6 +585,9 @@
   // Newest first; APP_VERSION is the top entry. Version X.YYY, bump one tier per
   // change: +0.001 bug fix, +0.010 tiny tweak, +0.100 small feature, +1 large feature.
   const CHANGELOG = [
+    { version: "5.909", date: "2026-09-27", changes: [
+      "Upcoming doses and the dose pop-up now show each dose's weekly equivalent, as a last check before taking it."
+    ] },
     { version: "5.809", date: "2026-09-26", changes: [
       "Upcoming doses and the dose pop-up now show your saved vial's concentration, to check against the vial in hand before drawing a dose.",
       "Each upcoming dose's mg and syringe units now sit on a larger line of their own that never splits, so they're easy to read on phones."
@@ -1206,11 +1210,11 @@
     $("upcomingDosesSection").hidden = !schedule.length && !last && !waiting;
     $("upcomingDosesGrid").innerHTML =
       (last ? `<div class="stat"><div class="val">${last.doseMg} mg</div><div class="lbl">Last dose taken${otherMedNote(last)} &middot; <span>${fmtDateBrief(last.date)}</span></div></div>` : "") +
-      // Upcoming doses lead with the weekday, the day you dose on, then the date
-      // and the dose itself. Due ones wait to be confirmed.
+      // Upcoming doses lead with the weekday, the day you dose on, then the date,
+      // the dose itself and its weekly equivalent. Due ones wait to be confirmed.
       schedule.map(d => `<div class="stat${d.due ? " due" : ""}">
         <div class="val">${fmtWeekday(d.date)}</div><div class="lbl"><span>${fmtDateBrief(d.date)}</span></div>
-        <div class="dose">${d.doseMg} mg${units(d.doseMg)}</div>
+        <div class="dose">${d.doseMg} mg${units(d.doseMg)}</div><div class="lbl"><span>${d.weeklyMg} mg a week</span></div>
         ${d.due ? `<button class="small" data-confirm-dose="${d.date}">Confirm dose</button>` : ""}
       </div>`).join("") +
       (waiting ? `<div class="empty-msg">No dose to count from yet. <button class="secondary small" data-set-anchor>Set anchor dose</button></div>` : "");
@@ -1513,9 +1517,9 @@
   // The day a plan's next dose was set to, "" once a dose has been logged since.
   const setNextDose = (plan, lastTaken) => (plan && plan.nextDose && lastTaken <= plan.nextDose.after ? plan.nextDose.date : "");
 
-  // The next three doses as { date, doseMg, due, after }, `after` being the last
-  // dose taken ("" if none). None without days between doses and a weekly dose,
-  // or with nothing to count from: no dose taken or set.
+  // The next three doses as { date, doseMg, weeklyMg, due, after }, `after` being
+  // the last dose taken ("" if none). None without days between doses and a
+  // weekly dose, or with nothing to count from: no dose taken or set.
   function doseSchedule() {
     const plan = medicationEnabled() ? planFor(currentMedication()) : null;
     if (!plan || !plan.intervalDays || !plan.weeklyMg) return [];
@@ -1526,7 +1530,7 @@
     const missed = Math.max(0, Math.floor(daysBetween(next, today) / every) - MAX_UPCOMING_DOSES + 1);
     return Array.from({ length: MAX_UPCOMING_DOSES }, (_, i) => {
       const date = addDays(next, (missed + i) * every);
-      return { date, doseMg: eachDoseMg(plan.weeklyMg, every), due: now >= dueAt(date, plan.doseTime), after };
+      return { date, doseMg: eachDoseMg(plan.weeklyMg, every), weeklyMg: plan.weeklyMg, due: now >= dueAt(date, plan.doseTime), after };
     });
   }
 
@@ -1556,6 +1560,7 @@
     $("doseModalMg").textContent = `${dose.doseMg} mg`;
     $("doseModalUnits").innerHTML = vial ? `<strong>${fmtUnits(dose.doseMg, vial.mgPerMl)}</strong> on a U&#8209;100 syringe` : "";
     $("doseModalUnits").hidden = !vial;
+    $("doseModalWeekly").textContent = `${dose.weeklyMg} mg a week`;
     showVialBadge("doseModalVial", vial);
     // A late dose (due before today) is logged on the day it was taken: its own
     // day, named (by weekday within the week), or today.
