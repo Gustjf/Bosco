@@ -9,13 +9,13 @@
 <style>
   :root {
     --bg: #f4f5f7; --panel: #ffffff; --border: #dcdfe4; --text: #1f2430; --muted: #6b7280;
-    --accent: #2563eb; --accent-dark: #1e40af; --good: #16a34a; --bad: #dc2626;
+    --accent: #2563eb; --accent-dark: #1e40af; --good: #16a34a; --warn: #ca8a04; --bad: #dc2626;
     --card-bg: #f8fafc; --btn-bg: #f8fafc; --ring: rgba(37, 99, 235, 0.15);
     --unsaved-bg: rgba(245, 158, 11, 0.15); --unsaved-border: rgba(245, 158, 11, 0.45);
   }
   [data-theme="dark"] {
     --bg: #0f172a; --panel: #1e293b; --border: #334155; --text: #f8fafc; --muted: #94a3b8;
-    --accent: #3b82f6; --accent-dark: #2563eb; --good: #22c55e; --bad: #ef4444;
+    --accent: #3b82f6; --accent-dark: #2563eb; --good: #22c55e; --warn: #eab308; --bad: #ef4444;
     --card-bg: #0f172a; --btn-bg: #1e293b; --ring: rgba(59, 130, 246, 0.25);
     --unsaved-bg: rgba(245, 158, 11, 0.2); --unsaved-border: rgba(245, 158, 11, 0.5);
   }
@@ -42,7 +42,9 @@
   .note { font-size: .8em; color: var(--muted); margin-top: 8px; }
   .footnote { font-size: .8em; color: var(--muted); margin-top: 10px; line-height: 1.5; }
   .good { color: var(--good); }
+  .warn { color: var(--warn); }
   .bad { color: var(--bad); }
+  .sep { margin: 0 .4em; color: var(--muted); font-weight: 400; } /* "|" between values: a dot could pass for a decimal point */
   footer { text-align: center; color: var(--muted); font-size: .78em; margin-top: 20px; padding-bottom: 36px; } /* room to scroll clear of the corner DEV/version tag */
   footer a { color: var(--muted); text-decoration: none; }
   footer a:hover { color: var(--text); text-decoration: underline; }
@@ -103,8 +105,7 @@
   .stat { position: relative; flex: 1; min-width: 120px; background: var(--card-bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; }
   .stat .val { font-size: 1.15em; font-weight: 700; }
   .stat .lbl { font-size: .75em; color: var(--muted); margin-top: 2px; }
-  .stat .rate-lb { font-size: .8em; white-space: nowrap; } /* the weekly rate in lb or kg, beside its % */
-  .stat .sep { margin: 0 .4em; color: var(--muted); font-weight: 400; } /* "|" between values: a dot could pass for a decimal point */
+  .stat .rate-lb { white-space: nowrap; } /* the weekly rate in lb or kg, beside its % */
   #statsSection .stat { min-width: 230px; } /* room for a full row of window pills */
   /* Room for "Wednesday", or wider when that's what keeps a dose on one line (fewer to a row). */
   #upcomingDosesGrid .stat { flex: 1 0 140px; min-width: auto; }
@@ -613,6 +614,11 @@
   // Newest first; APP_VERSION is the top entry. Version X.YYY, bump one tier per
   // change: +0.001 bug fix, +0.010 tiny tweak, +0.100 small feature, +1 large feature.
   const CHANGELOG = [
+    { version: "6.029", date: "2026-09-28", changes: [
+      "The weekly rate is green on pace, yellow within twice your on-pace range, and red beyond that or going the wrong way.",
+      "The weekly rate's lb or kg is now full size, and the averages line just reads weight to weight over the days between.",
+      "Dose cards and vial lines use | between values instead of dots."
+    ] },
     { version: "6.019", date: "2026-09-28", changes: [
       "Current Trend reads more concisely, with | between values instead of dots that could pass for decimal points.",
       "The weekly rate now turns red whenever it's outside your on-pace range.",
@@ -864,6 +870,7 @@
   const fmtNum = (v, places) => String(+v.toFixed(places));
   // A change with its sign, none when it rounds to zero: -0.52, +1.0, 0.0.
   const fmtSigned = (v, places) => { const s = Math.abs(v).toFixed(places); return `${+s ? (v < 0 ? "-" : "+") : ""}${s}`; };
+  const SEP = '<span class="sep">|</span>'; // between values on one line
   const fmtConc = mgPerMl => `${fmtNum(mgPerMl, 3)} mg/mL`; // as precise as it can be entered
   // A dose drawn from a vial, in U-100 insulin syringe units (100 units = 1 mL):
   // to the nearest half unit, then the exact amount when that differs, "12.5 units (12.36)".
@@ -1090,17 +1097,27 @@
 
   // The weekly pace goal: the one saved in start-up info, or the default until then.
   const paceGoal = () => profile.paceGoal || DEFAULT_PACE_GOAL;
-  // Its on-pace range: "0.75–1.25%", or "1%" with no range.
-  const fmtPaceBand = g => (g.rangePct ? `${fmtNum(g.weeklyPct - g.rangePct, 2)}–${fmtNum(g.weeklyPct + g.rangePct, 2)}%` : `${fmtNum(g.weeklyPct, 2)}%`);
-  // Green within the pace goal's range, red outside it.
-  const PACE_STATUS = { on: ["On pace", "good"], fast: ["Too fast", "bad"], slow: ["Too slow", "bad"], wrong: ["Wrong direction", "bad"] };
+  // Its on-pace range, or `times` that range (never below no change): "0.75–1.25%", or "1%" with no range.
+  const fmtPaceBand = (g, times = 1) => {
+    const r = g.rangePct * times;
+    return r ? `${fmtNum(Math.max(0, g.weeklyPct - r), 2)}–${fmtNum(g.weeklyPct + r, 2)}%` : `${fmtNum(g.weeklyPct, 2)}%`;
+  };
+  // Green within the pace goal's range, yellow within twice it, red beyond that or going the wrong way.
+  const PACE_STATUS = {
+    on: ["On pace", "good"], fast: ["Slightly fast", "warn"], slow: ["Slightly slow", "warn"],
+    tooFast: ["Too fast", "bad"], tooSlow: ["Too slow", "bad"], wrong: ["Wrong direction", "bad"]
+  };
 
   // Where a weekly rate (positive = losing) stands against the pace goal, by the
-  // % as shown: "on" pace, "fast" or "slow" of it, or going the "wrong" way.
+  // % as shown: "on" pace, a little off ("fast", "slow"), further off ("tooFast",
+  // "tooSlow"), or going the "wrong" way.
   function paceStatus(rate) {
     const g = paceGoal(), pct = +((g.dir === "gain" ? -rate : rate) * 100).toFixed(2); // toward the goal
-    if (Math.abs(pct - g.weeklyPct) <= g.rangePct + 1e-9) return "on";
-    return pct > g.weeklyPct ? "fast" : pct < 0 ? "wrong" : "slow";
+    const off = Math.abs(pct - g.weeklyPct) - 1e-9; // from the target, less a hair for rounding
+    if (off <= g.rangePct) return "on";
+    if (pct < 0) return "wrong";
+    const fast = pct > g.weeklyPct;
+    return off <= 2 * g.rangePct ? (fast ? "fast" : "slow") : fast ? "tooFast" : "tooSlow";
   }
 
   // Everything the views need, derived once per render.
@@ -1266,14 +1283,14 @@
     const last = past.slice(-PAGE_SIZE).some(hasDose) ? null : past.filter(hasDose).pop();
     // Scheduled doses are all of the current medication, so drawn from its active vial.
     const vial = activeVial();
-    const units = mg => (vial ? ` &middot; <strong>${fmtUnits(mg, vial.mgPerMl)}</strong>` : "");
+    const units = mg => (vial ? `${SEP}<strong>${fmtUnits(mg, vial.mgPerMl)}</strong>` : "");
     showVialBadge("upcomingVialBadge", schedule.length ? vial : null);
     // A plan with no dose taken or set has nothing to count from.
     const plan = medicationEnabled() && planFor(currentMedication());
     const waiting = !!(plan && plan.intervalDays && plan.weeklyMg) && !schedule.length;
     $("upcomingDosesSection").hidden = !schedule.length && !last && !waiting;
     $("upcomingDosesGrid").innerHTML =
-      (last ? `<div class="stat"><div class="val">${last.doseMg} mg</div><div class="lbl">Last dose taken${otherMedNote(last)} &middot; <span>${fmtDateBrief(last.date)}</span></div></div>` : "") +
+      (last ? `<div class="stat"><div class="val">${last.doseMg} mg</div><div class="lbl">Last dose taken${otherMedNote(last)}${SEP}<span>${fmtDateBrief(last.date)}</span></div></div>` : "") +
       // Upcoming doses lead with the weekday, the day you dose on, then the date,
       // the dose itself and its weekly equivalent. Due ones wait to be confirmed.
       schedule.map(d => `<div class="stat${d.due ? " due" : ""}">
@@ -1288,19 +1305,20 @@
   function renderStats({ w, trend }) {
     $("statsSection").hidden = w.length < 2;
     if (w.length < 2) return;
-    const rateEl = $("statRate"), g = paceGoal(), goal = `Goal: ${g.dir} ${fmtPaceBand(g)}/wk`, sep = '<span class="sep">|</span>';
+    const rateEl = $("statRate"), g = paceGoal(), goal = `Goal: ${g.dir} ${fmtPaceBand(g)}/wk`;
     if (!trend) {
       rateEl.textContent = "n/a";
       rateEl.className = "val";
       $("statRateNote").textContent = `Needs ${TREND_MIN_WEIGHINS}+ weigh-ins in each week compared`;
       $("statPace").textContent = goal;
     } else {
-      // The % and the weight a week it comes to, colored by where it stands against the pace goal.
+      // The % and the weight a week it comes to, colored by where it stands against the pace goal,
+      // then the two 7-day averages it comes from.
       const [status, cls] = PACE_STATUS[paceStatus(trend.rate)];
-      rateEl.innerHTML = `${fmtSigned(-trend.rate * 100, 2)}%/wk${sep}<span class="rate-lb">${fmtSigned(trend.perWeek, 1)} ${unit}/wk</span>`;
+      rateEl.innerHTML = `${fmtSigned(-trend.rate * 100, 2)}%/wk${SEP}<span class="rate-lb">${fmtSigned(trend.perWeek, 1)} ${unit}/wk</span>`;
       rateEl.className = `val ${cls}`;
-      $("statRateNote").textContent = `7-day avg ${trend.then.toFixed(1)} → ${trend.now.toFixed(1)} ${unit} over ${fmtNum(trend.apart, 1)} days`;
-      $("statPace").innerHTML = `<strong class="${cls}">${status}</strong>${sep}${goal}`;
+      $("statRateNote").textContent = `${trend.then.toFixed(1)} → ${trend.now.toFixed(1)} ${unit} over ${fmtNum(trend.apart, 1)} days`;
+      $("statPace").innerHTML = `<strong class="${cls}">${status}</strong>${SEP}${goal}`;
     }
     // An N-day average covers the latest weigh-in's day and the N-1 days before it.
     $("statAvg").textContent = `${mean(lastDays(w, +avgWindow - 1).map(e => e.weight)).toFixed(1)} ${unit}`;
@@ -1475,7 +1493,7 @@
     $("vialSummary").hidden = vialEditing;
     $("vialEditor").hidden = !vialEditing;
     $("vialSummaryText").innerHTML = vial
-      ? `<strong>${fmtConc(vial.mgPerMl)}</strong> <span class="muted">${vial.vialMg ? `&middot; ${fmtNum(vial.vialMg, 2)} mg + ${fmtNum(vial.bacMl, 2)} mL BAC water ` : ""}${isNaN(saved) ? "" : `&middot; saved ${fmtDateBrief(localDate(saved))}`}</span>`
+      ? `<strong>${fmtConc(vial.mgPerMl)}</strong><span class="muted">${vial.vialMg ? `${SEP}${fmtNum(vial.vialMg, 2)} mg + ${fmtNum(vial.bacMl, 2)} mL BAC water` : ""}${isNaN(saved) ? "" : `${SEP}saved ${fmtDateBrief(localDate(saved))}`}</span>`
       : other ? `Your active vial is for ${medLabel(other.medication)}.` : "No active vial yet.";
     $("changeVialBtn").textContent = vial ? "Change vial" : "Add vial";
     updateDosingNotes();
@@ -1504,8 +1522,8 @@
     if (vial && vialEditing && vialMode === "mix") notes.push(`Concentration: <strong>${fmtConc(vial.mgPerMl)}</strong>`);
     if (vial && dose) notes.push(`${dose} mg = <strong>${fmtUnits(dose, vial.mgPerMl)}</strong> on a U&#8209;100 syringe`); // "U-100" never splits
     // Under the saved vial, or inside the calculator while it's open.
-    show("vialUnitsNote", notes.join(" &middot; "));
-    show("vialCalcNote", notes.join(" &middot; "));
+    show("vialUnitsNote", notes.join(SEP));
+    show("vialCalcNote", notes.join(SEP));
   }
 
   // The dosing plan as entered, or false (after saying why) if it isn't valid.
@@ -1583,12 +1601,14 @@
     return g || false;
   }
 
-  // Live as the pace goal is entered: its range, and the weight a week that comes to at the latest weigh-in.
+  // Live as the pace goal is entered: its green range (and the weight a week that
+  // comes to at the latest weigh-in), then its yellow one.
   function updatePaceNote() {
     const g = enteredPaceGoal(true), w = weightEntries(), cur = w.length ? w[w.length - 1].weight : 0;
     const perWeek = pct => fmtNum(cur * pct / 100, 1);
     const weight = g && cur ? `, about ${g.rangePct ? `${perWeek(g.weeklyPct - g.rangePct)}–${perWeek(g.weeklyPct + g.rangePct)}` : perWeek(g.weeklyPct)} ${unit} at ${cur.toFixed(1)} ${unit}` : "";
-    $("paceNote").innerHTML = g ? `On pace: ${g.dir === "gain" ? "gaining" : "losing"} <strong>${fmtPaceBand(g)}</strong> a week${weight}.` : "";
+    const yellow = g && g.rangePct ? ` Yellow: ${fmtPaceBand(g, 2)}.` : "";
+    $("paceNote").innerHTML = g ? `Green: ${g.dir === "gain" ? "gaining" : "losing"} <strong>${fmtPaceBand(g)}</strong> a week${weight}.${yellow}` : "";
     $("paceNote").hidden = !g;
   }
 
