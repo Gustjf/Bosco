@@ -462,7 +462,7 @@
   </section>
 
   <footer>
-    Bosco &middot; Offline single-file HTML5 app &middot; <a href="#" id="reportBugLink">Report a bug</a>
+    Bosco<span class="sep">|</span>Offline single-file HTML5 app<span class="sep">|</span><a href="#" id="reportBugLink">Report a bug</a>
   </footer>
 </div>
 
@@ -614,6 +614,10 @@
   // Newest first; APP_VERSION is the top entry. Version X.YYY, bump one tier per
   // change: +0.001 bug fix, +0.010 tiny tweak, +0.100 small feature, +1 large feature.
   const CHANGELOG = [
+    { version: "6.039", date: "2026-09-28", changes: [
+      "Current Trend's goal now reads as your target ± range, e.g. Goal: 1% ± 0.125%, as precise as you entered it.",
+      "The footer, goal projections and sync status use | between values instead of dots."
+    ] },
     { version: "6.029", date: "2026-09-28", changes: [
       "The weekly rate is green on pace, yellow within twice your on-pace range, and red beyond that or going the wrong way.",
       "The weekly rate's lb or kg is now full size, and the averages line just reads weight to weight over the days between.",
@@ -1097,10 +1101,14 @@
 
   // The weekly pace goal: the one saved in start-up info, or the default until then.
   const paceGoal = () => profile.paceGoal || DEFAULT_PACE_GOAL;
-  // Its on-pace range, or `times` that range (never below no change): "0.75–1.25%", or "1%" with no range.
+  // Its %s as precise as they were entered (to 4 places): 1 -> "1%", 0.125 -> "0.125%".
+  const fmtPacePct = v => `${fmtNum(v, 4)}%`;
+  // The goal as entered: "1% ± 0.125%", or "1%" with no range.
+  const fmtPaceGoal = g => fmtPacePct(g.weeklyPct) + (g.rangePct ? ` ± ${fmtPacePct(g.rangePct)}` : "");
+  // Its on-pace range, or `times` that range (never below no change): "0.875–1.125%", or "1%" with no range.
   const fmtPaceBand = (g, times = 1) => {
     const r = g.rangePct * times;
-    return r ? `${fmtNum(Math.max(0, g.weeklyPct - r), 2)}–${fmtNum(g.weeklyPct + r, 2)}%` : `${fmtNum(g.weeklyPct, 2)}%`;
+    return r ? `${fmtNum(Math.max(0, g.weeklyPct - r), 4)}–${fmtPacePct(g.weeklyPct + r)}` : fmtPacePct(g.weeklyPct);
   };
   // Green within the pace goal's range, yellow within twice it, red beyond that or going the wrong way.
   const PACE_STATUS = {
@@ -1305,7 +1313,7 @@
   function renderStats({ w, trend }) {
     $("statsSection").hidden = w.length < 2;
     if (w.length < 2) return;
-    const rateEl = $("statRate"), g = paceGoal(), goal = `Goal: ${g.dir} ${fmtPaceBand(g)}/wk`;
+    const rateEl = $("statRate"), goal = `Goal: ${fmtPaceGoal(paceGoal())}`;
     if (!trend) {
       rateEl.textContent = "n/a";
       rateEl.className = "val";
@@ -1340,7 +1348,7 @@
       const v = last.weight * Math.pow(1 - rate, daysBetween(last.date, date) / 7);
       return `<div class="stat">
         <div class="val">${isPos(v) ? `${v.toFixed(1)} ${unit}` : "&mdash;"}</div>
-        <div class="lbl">${label}${isPos(v) ? ` &bull; ${fmtDateShort(date)}` : ""}</div>
+        <div class="lbl">${label}${isPos(v) ? `${SEP}${fmtDateShort(date)}` : ""}</div>
       </div>`;
     }).join("");
 
@@ -1954,7 +1962,7 @@
       `- Entry count: ${entries.length}`,
       `- Goal count: ${goals.length}`,
       `- Rate mode: ${rateMode}`,
-      `- Pace goal: ${paceGoal().dir} ${fmtPaceBand(paceGoal())} a week${profile.paceGoal ? "" : " (default)"}`,
+      `- Pace goal: ${paceGoal().dir} ${fmtPaceGoal(paceGoal())} a week${profile.paceGoal ? "" : " (default)"}`,
       `- Trend window: ${trendWindow}`,
       `- Average window: ${avgWindow}`,
       `- History page: ${currentPage}`,
@@ -2321,7 +2329,7 @@
   function renderSync() {
     const folder = syncDir ? `“${syncDir.name}”` : "";
     const status = !syncSupported ? "Autosave & sync to a folder needs Chrome or Edge, on a computer or Android."
-      : syncState === "on" ? `Autosave & sync on with folder ${folder}${syncNote ? ` · ${syncNote}` : ""}` : "";
+      : syncState === "on" ? `Autosave & sync on with folder ${folder}${syncNote ? ` | ${syncNote}` : ""}` : "";
     $("syncBtn").hidden = !syncSupported;
     $("syncBtn").textContent = syncState === "off" ? "Sync Folder…" : "Stop Syncing";
     $("syncStatus").textContent = status;
