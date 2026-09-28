@@ -9,13 +9,13 @@
 <style>
   :root {
     --bg: #f4f5f7; --panel: #ffffff; --border: #dcdfe4; --text: #1f2430; --muted: #6b7280;
-    --accent: #2563eb; --accent-dark: #1e40af; --good: #16a34a; --bad: #dc2626;
+    --accent: #2563eb; --accent-dark: #1e40af; --good: #16a34a; --bad: #dc2626; --warn: #d97706;
     --card-bg: #f8fafc; --btn-bg: #f8fafc; --ring: rgba(37, 99, 235, 0.15);
     --unsaved-bg: rgba(245, 158, 11, 0.15); --unsaved-border: rgba(245, 158, 11, 0.45);
   }
   [data-theme="dark"] {
     --bg: #0f172a; --panel: #1e293b; --border: #334155; --text: #f8fafc; --muted: #94a3b8;
-    --accent: #3b82f6; --accent-dark: #2563eb; --good: #22c55e; --bad: #ef4444;
+    --accent: #3b82f6; --accent-dark: #2563eb; --good: #22c55e; --bad: #ef4444; --warn: #f59e0b;
     --card-bg: #0f172a; --btn-bg: #1e293b; --ring: rgba(59, 130, 246, 0.25);
     --unsaved-bg: rgba(245, 158, 11, 0.2); --unsaved-border: rgba(245, 158, 11, 0.5);
   }
@@ -43,6 +43,7 @@
   .footnote { font-size: .8em; color: var(--muted); margin-top: 10px; line-height: 1.5; }
   .good { color: var(--good); }
   .bad { color: var(--bad); }
+  .warn { color: var(--warn); }
   footer { text-align: center; color: var(--muted); font-size: .78em; margin-top: 20px; padding-bottom: 36px; } /* room to scroll clear of the corner DEV/version tag */
   footer a { color: var(--muted); text-decoration: none; }
   footer a:hover { color: var(--text); text-decoration: underline; }
@@ -103,6 +104,7 @@
   .stat { position: relative; flex: 1; min-width: 120px; background: var(--card-bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; }
   .stat .val { font-size: 1.15em; font-weight: 700; }
   .stat .lbl { font-size: .75em; color: var(--muted); margin-top: 2px; }
+  .stat .rate-lb { font-size: .8em; white-space: nowrap; } /* the weekly rate in lb or kg, beside its % */
   #statsSection .stat { min-width: 230px; } /* room for a full row of window pills */
   /* Room for "Wednesday", or wider when that's what keeps a dose on one line (fewer to a row). */
   #upcomingDosesGrid .stat { flex: 1 0 140px; min-width: auto; }
@@ -155,13 +157,14 @@
   .rate-labels .rl-mid { left: calc((100% - 1px) / 2); transform: translateX(-50%); }
   .rate-labels .rl-max { right: 0; }
 
-  /* --- Start-up dosing plan & active vial --- */
-  .dosing { margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--border); }
+  /* --- Start-up dosing plan, active vial & pace goal --- */
+  .dosing, .pace-goal { margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--border); }
   #oneTimeInfoFields:empty { display: none; }
-  #oneTimeInfoFields:empty + .dosing { margin-top: 8px; padding-top: 0; border-top: none; } /* only the dosing is being asked */
+  /* No questions above the dosing, or above the pace goal with no dosing either. */
+  #oneTimeInfoFields:empty + .dosing, #oneTimeInfoFields:empty + [hidden] + .pace-goal { margin-top: 8px; padding-top: 0; border-top: none; }
   .dosing .window-pills { margin-top: 0; }
-  /* The plan's fields: three across, or two per row on phones (the dose time on
-     a row of its own), boxes lined up even when a label wraps. */
+  /* The plan's (and pace goal's) fields: three across, or two per row on phones
+     (the dose time on a row of its own), boxes lined up even when a label wraps. */
   .dose-fields { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; align-items: end; }
   @media (max-width: 600px) { .dose-fields { grid-template-columns: 1fr 1fr; } }
   .vial-head { margin-top: 14px; }
@@ -307,6 +310,25 @@
         </div>
       </div>
     </div>
+    <!-- The weekly pace Current Trend's weekly rate is colored against. -->
+    <div class="pace-goal" id="paceBox" hidden>
+      <div class="subhead">Weekly pace goal</div>
+      <div class="mode-toggle" id="paceDirToggle">
+        <button type="button" class="mode-btn active" data-pace-dir="lose">Lose weight</button>
+        <button type="button" class="mode-btn" data-pace-dir="gain">Gain weight</button>
+      </div>
+      <div class="dose-fields">
+        <div>
+          <label for="pacePctInput">Weekly target, %</label>
+          <input type="number" id="pacePctInput" step="0.05" min="0" max="3" placeholder="e.g. 1">
+        </div>
+        <div>
+          <label for="paceRangeInput">On-pace range, &plusmn;%</label>
+          <input type="number" id="paceRangeInput" step="0.05" min="0" placeholder="e.g. 0.25">
+        </div>
+      </div>
+      <div class="note" id="paceNote" hidden></div>
+    </div>
     <div class="actions">
       <button id="oneTimeInfoSaveBtn">Save</button>
       <button class="secondary" id="oneTimeInfoCancelBtn" hidden>Cancel</button>
@@ -340,10 +362,11 @@
     <h2>Current Trend</h2>
     <div class="stat-grid">
       <div class="stat">
-        <div class="val" id="statRate">&mdash;</div><div class="lbl">fitted weekly rate</div>
+        <div class="val" id="statRate">&mdash;</div><div class="lbl" id="statRateNote">weekly rate</div>
+        <div class="lbl" id="statPace"></div>
         <div class="window-pills" id="trendWindowWrap">
-          <button class="pill active" data-window="all">All</button>
-          <button class="pill" data-window="7">7d</button>
+          <button class="pill active" data-window="7">7d</button>
+          <button class="pill" data-window="14">14d</button>
           <button class="pill" data-window="30">30d</button>
           <button class="pill" data-window="60">60d</button>
           <button class="pill" data-window="90">90d</button>
@@ -525,6 +548,10 @@
   const DOSING_QUESTIONS_VERSION = 2;
   const BAC_ML_RANGE = [1, 3];       // BAC water a vial can be mixed with, as on its slider
   const MAX_ETA_WEEKS = 5200; // ~100 years; anything slower counts as a flat rate
+  const TREND_MIN_WEIGHINS = 3; // in each of the two 7-day averages Current Trend's weekly rate compares
+  // The weekly pace goal until one is saved in start-up info: lose 1% a week, give or take 0.25%.
+  const DEFAULT_PACE_GOAL = { dir: "lose", weeklyPct: 1, rangePct: 0.25 };
+  const MAX_PACE_PCT = 3; // the highest weekly target, in % of body weight
   const BUG_REPORTS_MAX = 20;
   const DEBUG_LOG_MAX = 40;
   const SYNC_CHECK_MS = 5000;    // how often the sync folder is checked for other devices' saves
@@ -558,13 +585,14 @@
   let unit = "lb";         // the whole app uses one unit at a time: profile.unit, or lb until chosen
   let bugReports = [];     // { id, timestamp, description, markdown }
   let rateMode = "trend";  // "trend" | "custom"
-  let trendWindow = "all"; // "all" | "7" | "30" | "60" | "90"
-  let avgWindow = "7";     // same options, for the rolling average; starts at 7 on every load
+  let trendWindow = "7";   // days back the weekly rate compares with: "7" | "14" | "30" | "60" | "90"
+  let avgWindow = "7";     // the rolling average's: "all" | "7" | "30" | "60" | "90"; starts at 7 on every load
   let currentPage = 1;
   let unsavedChanges = false;
   let devModeOn = false;
   let entryDateDefault = ""; // the "today" the Date field was last set to
   let dosingAsking = false;  // start-up info is showing the dosing plan & vial
+  let paceAsking = false;    // start-up info is showing the weekly pace goal
   let vialEditing = false;   // the vial calculator is open
   let anchorEditing = false; // the anchor dose date is showing in start-up info
   let vialMode = "mix";      // "mix" (vial mg + BAC water) | "known" (mg/mL)
@@ -585,6 +613,12 @@
   // Newest first; APP_VERSION is the top entry. Version X.YYY, bump one tier per
   // change: +0.001 bug fix, +0.010 tiny tweak, +0.100 small feature, +1 large feature.
   const CHANGELOG = [
+    { version: "6.009", date: "2026-09-28", changes: [
+      "Current Trend's weekly rate now compares your latest 7-day average with the one a week earlier (or 14–90 days, by its pills), allowing for missed weigh-ins.",
+      "The weekly rate also shows the lb or kg a week it comes to.",
+      "Setup has a weekly pace goal (lose or gain, % a week, on-pace range): the rate is green on pace, amber off pace, red going the wrong way.",
+      "The pace goal's lose or gain now decides which way counts as progress."
+    ] },
     { version: "5.909", date: "2026-09-27", changes: [
       "Upcoming doses and the dose pop-up now show each dose's weekly equivalent, as a last check before taking it."
     ] },
@@ -823,6 +857,8 @@
   }
   // Rounded for display, without trailing zeros: 5.8333 -> "5.83", 20.0 -> "20".
   const fmtNum = (v, places) => String(+v.toFixed(places));
+  // A change with its sign, none when it rounds to zero: -0.52, +1.0, 0.0.
+  const fmtSigned = (v, places) => { const s = Math.abs(v).toFixed(places); return `${+s ? (v < 0 ? "-" : "+") : ""}${s}`; };
   const fmtConc = mgPerMl => `${fmtNum(mgPerMl, 3)} mg/mL`; // as precise as it can be entered
   // A dose drawn from a vial, in U-100 insulin syringe units (100 units = 1 mL):
   // to the nearest half unit, then the exact amount when that differs, "12.5 units (12.36)".
@@ -921,7 +957,8 @@
       name: typeof raw.name === "string" ? raw.name.trim() : "",
       medication: MEDICATIONS[raw.medication] ? raw.medication : "",
       dosePlan: cleanDosePlan(raw.dosePlan),
-      vial: cleanVial(raw.vial)
+      vial: cleanVial(raw.vial),
+      paceGoal: cleanPaceGoal(raw.paceGoal)
     };
   }
 
@@ -953,6 +990,15 @@
   }
   const latest = (a, b) => (!a || (b && b.savedAt >= a.savedAt) ? b : a); // b on a tie
 
+  // A weekly pace goal from storage, a backup, or start-up info, or null if it's
+  // unusable. A range as wide as the target would count no change as on pace.
+  function cleanPaceGoal(g) {
+    if (!g || typeof g !== "object" || (g.dir !== "lose" && g.dir !== "gain")) return null;
+    const { weeklyPct, rangePct } = g;
+    if (!isPos(weeklyPct) || weeklyPct > MAX_PACE_PCT || !isNum(rangePct) || rangePct < 0 || rangePct >= weeklyPct) return null;
+    return { dir: g.dir, weeklyPct, rangePct };
+  }
+
   function loadAll() {
     const p = readJSON(KEYS.profile);
     profile = p && typeof p === "object" && !Array.isArray(p) ? p : {};
@@ -961,6 +1007,7 @@
     unit = profile.unit || "lb";
     profile.dosePlan = cleanDosePlan(profile.dosePlan);
     profile.vial = cleanVial(profile.vial);
+    profile.paceGoal = cleanPaceGoal(profile.paceGoal);
     // Older versions only asked "Do you take Tirzepatide?"; carry that answer over.
     if ("usesTirzepatide" in profile) {
       if (!profile.medication) profile.medication = profile.usesTirzepatide === false ? "none" : LEGACY_MEDICATION;
@@ -1016,36 +1063,47 @@
   }
 
   /**
-   * Fits ln(weight) over time — a constant percentage change per week, which
-   * suits body weight better than a straight line — and returns the fractional
-   * weekly rate: positive = losing, negative = gaining, null = too few points.
+   * Current Trend's weekly rate: your latest 7-day average weight (the 7 days
+   * ending on the latest weigh-in) against the 7-day average `days` earlier.
+   * The change between them is spread over the days actually between the two
+   * (from the average date of each one's weigh-ins), so a missed weigh-in can't
+   * make it look faster or slower, and compounded to a week as projections are.
+   * Returns { rate: fraction a week (positive = losing), perWeek: weight a week,
+   * now, then: the two averages, apart: days between them }, or null without
+   * TREND_MIN_WEIGHINS weigh-ins in each.
    */
-  function fitWeeklyRate(w) {
-    if (w.length < 2) return null;
-    const ts = w.map(e => daysBetween(w[0].date, e.date) / 7);
-    const ys = w.map(e => Math.log(e.weight));
-    const mt = mean(ts), my = mean(ys);
-    let num = 0, den = 0;
-    ts.forEach((t, i) => { num += (t - mt) * (ys[i] - my); den += (t - mt) * (t - mt); });
-    return den ? 1 - Math.exp(num / den) : null;
+  function weeklyTrend(w, days) {
+    if (!w.length) return null;
+    const end = w[w.length - 1].date;
+    const weekTo = last => w.filter(e => e.date <= last && daysBetween(e.date, last) < 7);
+    const recent = weekTo(end), earlier = weekTo(addDays(end, -days));
+    if (recent.length < TREND_MIN_WEIGHINS || earlier.length < TREND_MIN_WEIGHINS) return null;
+    const avgWeight = ws => mean(ws.map(e => e.weight)), avgDay = ws => mean(ws.map(e => daysBetween(end, e.date)));
+    const now = avgWeight(recent), then = avgWeight(earlier), apart = avgDay(recent) - avgDay(earlier);
+    return { rate: 1 - Math.pow(now / then, 7 / apart), perWeek: (now - then) * 7 / apart, now, then, apart };
   }
 
-  // Which way counts as progress: the custom slider's sign when it's in use,
-  // otherwise the last 90 days of weigh-ins ("lose" unless they show a gain).
-  function goalDirection(w) {
-    const custom = customRate();
-    if (rateMode === "custom" && custom !== 0) return custom > 0 ? "gain" : "lose";
-    const r = fitWeeklyRate(lastDays(w, 90));
-    return r !== null && r < 0 ? "gain" : "lose";
+  // The weekly pace goal: the one saved in start-up info, or the default until then.
+  const paceGoal = () => profile.paceGoal || DEFAULT_PACE_GOAL;
+  // Its on-pace range: "0.75–1.25%", or "1%" with no range.
+  const fmtPaceBand = g => (g.rangePct ? `${fmtNum(g.weeklyPct - g.rangePct, 2)}–${fmtNum(g.weeklyPct + g.rangePct, 2)}%` : `${fmtNum(g.weeklyPct, 2)}%`);
+  const PACE_STATUS = { on: ["On pace", "good"], fast: ["Faster than goal", "warn"], slow: ["Slower than goal", "warn"], wrong: ["Wrong direction", "bad"] };
+
+  // Where a weekly rate (positive = losing) stands against the pace goal, by the
+  // % as shown: "on" pace, "fast" or "slow" of it, or going the "wrong" way.
+  function paceStatus(rate) {
+    const g = paceGoal(), pct = +((g.dir === "gain" ? -rate : rate) * 100).toFixed(2); // toward the goal
+    if (Math.abs(pct - g.weeklyPct) <= g.rangePct + 1e-9) return "on";
+    return pct > g.weeklyPct ? "fast" : pct < 0 ? "wrong" : "slow";
   }
 
   // Everything the views need, derived once per render.
   function model() {
     const w = weightEntries();
-    const trend = fitWeeklyRate(trendWindow === "all" ? w : lastDays(w, +trendWindow));
-    const dir = goalDirection(w);
+    const trend = weeklyTrend(w, +trendWindow);
+    const dir = paceGoal().dir; // which way counts as progress
     // The slider is signed like the display (negative = lose); rates are positive = lose.
-    const rate = rateMode === "trend" ? trend || 0 : -customRate() / 100;
+    const rate = rateMode === "trend" ? (trend ? trend.rate : 0) : -customRate() / 100;
     const sorted = goals.slice().sort((a, b) => (dir === "gain" ? a - b : b - a)); // nearest goal first
     return { w, trend, dir, rate, goals: sorted };
   }
@@ -1221,17 +1279,22 @@
     promptDueDose(schedule.filter(d => d.due));
   }
 
-  function renderStats({ w, trend, dir }) {
+  function renderStats({ w, trend }) {
     $("statsSection").hidden = w.length < 2;
     if (w.length < 2) return;
-    const rateEl = $("statRate");
-    if (trend === null) {
+    const rateEl = $("statRate"), g = paceGoal(), goalNote = `goal: ${g.dir} ${fmtPaceBand(g)} a week`;
+    if (!trend) {
       rateEl.textContent = "n/a";
       rateEl.className = "val";
+      $("statRateNote").textContent = `Compares 7-day averages ${trendWindow} days apart; needs ${TREND_MIN_WEIGHINS}+ weigh-ins in each.`;
+      $("statPace").textContent = goalNote;
     } else {
-      const losing = trend >= 0;
-      rateEl.textContent = `${losing ? "-" : "+"}${Math.abs(trend * 100).toFixed(2)}%/wk`;
-      rateEl.className = "val " + ((dir === "gain") !== losing ? "good" : "bad");
+      // The % and the weight a week it comes to, colored by where it stands against the pace goal.
+      const [status, cls] = PACE_STATUS[paceStatus(trend.rate)];
+      rateEl.innerHTML = `${fmtSigned(-trend.rate * 100, 2)}%/wk <span class="rate-lb">&middot; ${fmtSigned(trend.perWeek, 1)} ${unit}/wk</span>`;
+      rateEl.className = `val ${cls}`;
+      $("statRateNote").textContent = `7-day avg ${trend.now.toFixed(1)} ${unit} vs ${trend.then.toFixed(1)} ${unit}, ${fmtNum(trend.apart, 1)} days earlier`;
+      $("statPace").innerHTML = `<strong class="${cls}">${status}</strong> &middot; ${goalNote}`;
     }
     // An N-day average covers the latest weigh-in's day and the N-1 days before it.
     const avgOf = avgWindow === "all" ? w : lastDays(w, +avgWindow - 1);
@@ -1239,13 +1302,13 @@
     $("statAvgLabel").textContent = avgWindow === "all" ? "all-time avg" : `${avgWindow}-day rolling avg`;
   }
 
-  function renderGoals({ w, rate, dir, goals: sorted }) {
+  function renderGoals({ w, trend, rate, goals: sorted }) {
     $("goalsSection").hidden = !w.length;
     if (!w.length) return;
     const last = w[w.length - 1];
-    $("goalsRateNote").textContent = rateMode === "trend"
-      ? `Using the fitted trend from the ${trendWindow === "all" ? "all-time" : trendWindow + "d"} window (set above in Current Trend).`
-      : `Using the custom weekly rate above, applied toward your goal to ${dir} weight.`;
+    $("goalsRateNote").textContent = rateMode === "custom" ? "Using the custom weekly rate above."
+      : trend ? `Using the ${trendWindow}d weekly rate from Current Trend (set above).`
+      : `Current Trend has no ${trendWindow}d weekly rate yet, so there's nothing to project from.`;
 
     // Projected weight at the selected rate a month (4 weeks) out, then at the
     // start of each of the next three seasons.
@@ -1322,7 +1385,8 @@
     // medication is taken or being picked), again when a dosing question is
     // added, and whenever start-up info is edited.
     dosingAsking = !!editAll || (profile.dosingAsked !== DOSING_QUESTIONS_VERSION && (medicationEnabled() || fields.some(f => f.key === "medication")));
-    $("oneTimeInfoSection").hidden = !fields.length && !dosingAsking;
+    paceAsking = !!editAll || !profile.paceGoal; // asked once, and whenever start-up info is edited
+    $("oneTimeInfoSection").hidden = !fields.length && !dosingAsking && !paceAsking;
     $("oneTimeInfoCancelBtn").hidden = !editAll;
     $("oneTimeInfoFields").innerHTML = fields.map(f => {
       const id = "oneTimeInput_" + f.key;
@@ -1337,6 +1401,7 @@
     }).join("");
     fields.filter(f => f.type === "text").forEach(f => { $("oneTimeInput_" + f.key).value = profile[f.key] || ""; });
     renderDosing();
+    renderPaceGoal();
   }
 
   // The medication picked in start-up info, or the current one if it isn't being asked.
@@ -1490,6 +1555,36 @@
   function storeVial(vial, med) {
     profile.vial = { medication: med, ...vial, savedAt: new Date().toISOString() };
     vialEditing = false;
+  }
+
+  // The weekly pace goal in start-up info, prefilled with the current one.
+  function renderPaceGoal() {
+    const g = paceGoal();
+    $("paceBox").hidden = !paceAsking;
+    $("paceDirToggle").querySelectorAll("button").forEach(b => b.classList.toggle("active", b.dataset.paceDir === g.dir));
+    $("pacePctInput").value = g.weeklyPct;
+    $("paceRangeInput").value = g.rangePct;
+    updatePaceNote();
+  }
+
+  // The pace goal as entered, or false (saying why, unless quiet) if it isn't valid.
+  function enteredPaceGoal(quiet) {
+    const g = cleanPaceGoal({
+      dir: $("paceDirToggle").querySelector("button.active").dataset.paceDir,
+      weeklyPct: readNumber("pacePctInput"),
+      rangePct: readNumber("paceRangeInput")
+    });
+    if (!g && !quiet) alert(`Please enter a weekly target above 0 and up to ${MAX_PACE_PCT}%, and an on-pace range of 0 or more that's smaller than the target.`);
+    return g || false;
+  }
+
+  // Live as the pace goal is entered: its range, and the weight a week that comes to at the latest weigh-in.
+  function updatePaceNote() {
+    const g = enteredPaceGoal(true), w = weightEntries(), cur = w.length ? w[w.length - 1].weight : 0;
+    const perWeek = pct => fmtNum(cur * pct / 100, 1);
+    const weight = g && cur ? `, about ${g.rangePct ? `${perWeek(g.weeklyPct - g.rangePct)}–${perWeek(g.weeklyPct + g.rangePct)}` : perWeek(g.weeklyPct)} ${unit} at ${cur.toFixed(1)} ${unit}` : "";
+    $("paceNote").innerHTML = g ? `On pace: ${g.dir === "gain" ? "gaining" : "losing"} <strong>${fmtPaceBand(g)}</strong> a week${weight}.` : "";
+    $("paceNote").hidden = !g;
   }
 
   // ==========================================================================
@@ -1834,6 +1929,7 @@
       `- Entry count: ${entries.length}`,
       `- Goal count: ${goals.length}`,
       `- Rate mode: ${rateMode}`,
+      `- Pace goal: ${paceGoal().dir} ${fmtPaceBand(paceGoal())} a week${profile.paceGoal ? "" : " (default)"}`,
       `- Trend window: ${trendWindow}`,
       `- Average window: ${avgWindow}`,
       `- History page: ${currentPage}`,
@@ -1938,6 +2034,7 @@
       medication: currentMedication(),
       dosePlan: profile.dosePlan,
       vial: profile.vial,
+      paceGoal: profile.paceGoal,
       entries,
       goals,
       cumulativeDoseMgByMedication: cumulativeDoseMg() // derived totals for reference; not read on import
@@ -1956,6 +2053,7 @@
     entries = clean.entries;
     goals = clean.goals;
     if (clean.name) profile.name = clean.name; // older backups have no name; keep ours
+    if (clean.paceGoal) profile.paceGoal = clean.paceGoal; // nor a pace goal
     // The most recently saved dosing plan and vial are kept, so an older backup
     // never brings back an old vial's concentration.
     profile.dosePlan = latest(profile.dosePlan, clean.dosePlan);
@@ -2059,10 +2157,11 @@
       goals: [...new Set(older.goals.concat(newer.goals))].sort((x, y) => y - x),
       name: newer.name || older.name,
       dosePlan: latest(older.dosePlan, newer.dosePlan),
-      vial: latest(older.vial, newer.vial)
+      vial: latest(older.vial, newer.vial),
+      paceGoal: newer.paceGoal || older.paceGoal
     };
   }
-  const dataKey = d => JSON.stringify([d.entries, d.goals, d.name, d.dosePlan, d.vial]);
+  const dataKey = d => JSON.stringify([d.entries, d.goals, d.name, d.dosePlan, d.vial, d.paceGoal]);
 
   // Brings in a save found in the folder; returns what happened, or "" if nothing.
   function incorporate(raw) {
@@ -2077,7 +2176,7 @@
     const backupUnit = replace && !profile.unit && (raw.unit === "kg" || raw.unit === "lb") ? raw.unit : "";
     const theirs = normalizeBackup(raw, backupUnit || unit);
     if (!clock && !theirs.entries.length) return "";
-    const ours = { entries, goals, name: profile.name, dosePlan: profile.dosePlan, vial: profile.vial };
+    const ours = { entries, goals, name: profile.name, dosePlan: profile.dosePlan, vial: profile.vial, paceGoal: profile.paceGoal };
     const next = replace
       ? { ...theirs, dosePlan: latest(ours.dosePlan, theirs.dosePlan), vial: latest(ours.vial, theirs.vial) } // as on import
       : mergeVersions({ ...ours, savedAt: syncMeta.changedAt, device: syncMeta.device },
@@ -2089,7 +2188,7 @@
       syncMeta.changedAt = String(raw.savedAt || syncMeta.changedAt);
       storeSyncMeta();
     }
-    if (!backupUnit && dataKey({ ...next, name: next.name || profile.name }) === dataKey(ours)) return ""; // nothing new here
+    if (!backupUnit && dataKey({ ...next, name: next.name || profile.name, paceGoal: next.paceGoal || profile.paceGoal }) === dataKey(ours)) return ""; // nothing new here
     applyBackup(next, backupUnit);
     return replace ? "Loaded" : "Combined changes with";
   }
@@ -2359,6 +2458,8 @@
     if (btn.parentElement.id === "oneTimeInput_medication") renderDosing(); // dosing is per medication
   });
   $("dosingBox").addEventListener("input", updateDosingNotes);
+  onToggle($("paceDirToggle"), "data-pace-dir", updatePaceNote);
+  $("paceBox").addEventListener("input", updatePaceNote);
   onButton($("vialModeToggle"), "button[data-vial-mode]", btn => setVialMode(btn.dataset.vialMode));
   $("changeVialBtn").addEventListener("click", openVialEditor);
   $("setAnchorBtn").addEventListener("click", openAnchorEditor);
@@ -2402,8 +2503,8 @@
   });
 
   $("oneTimeInfoSaveBtn").addEventListener("click", () => {
-    // The dosing plan and an open vial calculator are checked first, so a bad
-    // entry there changes nothing.
+    // The dosing plan, an open vial calculator and the pace goal are checked
+    // first, so a bad entry there changes nothing.
     const med = formMedication(), dosing = dosingAsking && med !== "none";
     const plan = dosing ? enteredPlan() : null;
     if (plan === false) return;
@@ -2411,6 +2512,8 @@
     if (vial === false) return;
     const anchor = dosing ? enteredAnchor(plan.intervalDays) : null;
     if (anchor === false) return;
+    const pace = paceAsking ? enteredPaceGoal() : null;
+    if (pace === false) return;
     const prevUnit = unit;
     ONE_TIME_FIELDS.forEach(f => {
       const el = $("oneTimeInput_" + f.key);
@@ -2419,6 +2522,7 @@
       if (f.optional) profile[f.key + "Asked"] = true;
     });
     if (dosingAsking) profile.dosingAsked = DOSING_QUESTIONS_VERSION;
+    if (pace) profile.paceGoal = pace;
     const oldPlan = planFor(med) || {};
     if (plan && (anchor || Object.keys(plan).some(k => plan[k] !== (oldPlan[k] ?? null)))) {
       profile.dosePlan = { medication: med, ...plan, nextDose: anchor || oldPlan.nextDose || null, savedAt: new Date().toISOString() };
